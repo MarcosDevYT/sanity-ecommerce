@@ -5,50 +5,55 @@ import { headers } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+
 export async function POST(req: NextRequest) {
-  const body = await req.text();
-  const headersList = await headers();
-  const sig = headersList.get("stripe-signature");
-
-  if (!sig) {
-    return NextResponse.json({ error: "No signature" }, { status: 400 });
-  }
-
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!webhookSecret) {
-    console.error("Stripe webhook secret not found");
-    return NextResponse.json({ error: "No webhook secret" }, { status: 500 });
-  }
-
-  let event: Stripe.Event;
-
   try {
-    event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
-  } catch (error) {
-    console.error("Webhook signature verification failed", error);
-    return NextResponse.json(
-      { error: "Webhook signature verification failed" },
-      { status: 400 }
-    );
-  }
+    const body = await req.text();
+    const headersList = await headers();
+    const signature = headersList.get("stripe-signature");
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as Stripe.Checkout.Session;
+    if (!signature) {
+      return new NextResponse("No signature found", { status: 400 });
+    }
+
+    let event: Stripe.Event;
 
     try {
-      const order = await createOrderInSanity(session);
-      console.log("Order created in Sanity", order);
-    } catch (error) {
-      console.error("Error processing checkout session", error);
-      return NextResponse.json(
-        { error: "Error processing checkout session" },
-        { status: 500 }
-      );
-    }
-  }
+      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.error(`Webhook signature verification failed: ${errorMessage}`);
 
-  return NextResponse.json({ received: true });
+      return new NextResponse(`Webhook Error: ${errorMessage}`, {
+        status: 400,
+      });
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+
+      try {
+        const order = await createOrderInSanity(session);
+        console.log("Order created in Sanity", order);
+      } catch (error) {
+        console.error("Error processing checkout session", error);
+        return NextResponse.json(
+          { error: "Error processing checkout session" },
+          { status: 500 }
+        );
+      }
+    }
+
+    return NextResponse.json({ received: true });
+  } catch (error) {
+    console.error("Error processing webhook", error);
+    return NextResponse.json(
+      { error: "Error processing webhook" },
+      { status: 500 }
+    );
+  }
 }
 
 async function createOrderInSanity(session: Stripe.Checkout.Session) {
